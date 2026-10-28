@@ -1,0 +1,878 @@
+#!/usr/bin/env bash
+
+# Install - sudo apt install python3 python3-venv python3-pip python3-netcdf4
+# Install - sudo apt install python3-netcdf4
+
+# Sparrowbush Lightning and Convective Atmosphere Monitor
+# Target: 34 Whitehead Road, Sparrow Bush, NY 12780
+#
+# Lightning source: NOAA GOES-19 Geostationary Lightning Mapper (GLM)
+# public data from the NOAA Open Data Dissemination AWS bucket.
+# No subscription, account, API key, username, or password is required.
+#
+# GLM detects total lightning flashes, including in-cloud, cloud-to-cloud,
+# and cloud-to-ground activity. It does not identify flash type, electrical
+# polarity, or peak current. Locations are satellite-derived flash centroids.
+
+set -u
+
+ADDRESS="34 Whitehead Road, Sparrow Bush, NY 12780"
+TIMEZONE="America/New_York"
+RADIUS_MILES="100"
+LOOKBACK_MINUTES="60"
+CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/sparrowbush-lightning"
+VENV_DIR="$CACHE_ROOT/venv"
+
+clear 2>/dev/null || true
+printf '%s\n' "SPARROWBUSH LIGHTNING MONITOR"
+printf '%s\n' "$ADDRESS"
+printf '\n'
+printf 'Local time: %s\n' "$(TZ="$TIMEZONE" date '+%A, %B %d, %Y %I:%M:%S %p %Z')"
+printf '24-hour:   %s\n' "$(TZ="$TIMEZONE" date '+%Y-%m-%d %H:%M:%S %Z')"
+printf 'UTC time:  %s\n' "$(TZ=UTC date '+%Y-%m-%d %H:%M:%S UTC')"
+printf '\n'
+
+close_terminal() {
+    printf '\n'
+    read -r -n 1 -s -p "Press any key to close the terminal..."
+    printf '\n'
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
+    printf 'Error: python3 is required.\n'
+    close_terminal
+    exit 1
+fi
+
+mkdir -p "$CACHE_ROOT"
+PYTHON_BIN="python3"
+
+# NOAA GLM files are NetCDF4. Create a small private virtual environment on
+# first run so no system Python packages or paid services are required.
+if ! python3 -c 'import netCDF4' >/dev/null 2>&1; then
+    if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+        printf 'Preparing the free NOAA lightning-data reader...\n'
+        if ! python3 -m venv "$VENV_DIR" >/dev/null 2>&1; then
+            printf '\nUnable to create the Python virtual environment.\n'
+            printf 'Install the required Linux package, then run this script again:\n'
+            printf '  sudo apt install python3-venv\n'
+            close_terminal
+            exit 1
+        fi
+    fi
+    PYTHON_BIN="$VENV_DIR/bin/python"
+    if ! "$PYTHON_BIN" -c 'import netCDF4' >/dev/null 2>&1; then
+        printf 'Installing the NetCDF reader into the private environment...\n'
+        if ! "$PYTHON_BIN" -m pip install --quiet --disable-pip-version-check netCDF4; then
+            printf '\nUnable to install the NetCDF reader. Check the internet connection and try again.\n'
+            close_terminal
+            exit 1
+        fi
+    fi
+fi
+
+REPORT_FILE="$(mktemp --tmpdir lightning-report.XXXXXX.txt)"
+trap 'rm -f "$REPORT_FILE"' EXIT
+
+export ADDRESS TIMEZONE RADIUS_MILES LOOKBACK_MINUTES
+printf 'Retrieving NOAA GOES-19 total-lightning flashes and atmospheric data...\n'
+
+"$PYTHON_BIN" >"$REPORT_FILE" <<'PY'
+from __future__ import annotations
+
+import json
+import math
+import os
+import statistics
+import sys
+import re
+import tempfile
+import xml.etree.ElementTree as ET
+import urllib.error
+import urllib.parse
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Iterable
+
+from netCDF4 import Dataset
+from zoneinfo import ZoneInfo
+
+ADDRESS = os.environ.get("ADDRESS", "34 Whitehead Road, Sparrow Bush, NY 12780")
+TZ_NAME = os.environ.get("TIMEZONE", "America/New_York")
+LOCAL_TZ = ZoneInfo(TZ_NAME)
+RADIUS_MI = float(os.environ.get("RADIUS_MILES", "100"))
+LOOKBACK_MIN = int(os.environ.get("LOOKBACK_MINUTES", "60"))
+GOES_PRIMARY = "19"
+GOES_FALLBACK = "18"
+GOES_PRODUCT = "GLM-L2-LCFA"
+USER_AGENT = "Sparrowbush-Lightning-Monitor/2.0 (personal terminal weather display; NOAA public data)"
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "sparrowbush-lightning"
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+LOCATION_CACHE = CACHE_DIR / "location.json"
+
+RESET = "\033[0m"
+BOLD = "\033[1m"
+CYAN = "\033[36m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+DIM = "\033[2m"
+
+
+def heading(text: str) -> None:
+    print(f"\n{BOLD}{CYAN}{text}{RESET}")
+    print("=" * len(text))
+
+
+def subheading(text: str) -> None:
+    print(f"\n{BOLD}{text}{RESET}")
+    print("-" * len(text))
+
+
+def http_bytes(url: str, *, accept: str = "*/*", timeout: int = 30) -> bytes:
+    headers = {"User-Agent": USER_AGENT, "Accept": accept}
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        return response.read()
+
+
+def http_json(url: str, *, timeout: int = 30) -> Any:
+    return json.loads(http_bytes(url, accept="application/json", timeout=timeout).decode("utf-8"))
+
+
+def geocode_address() -> tuple[float, float, str]:
+    if LOCATION_CACHE.exists():
+        try:
+            cached = json.loads(LOCATION_CACHE.read_text())
+            if cached.get("address") == ADDRESS:
+                return float(cached["lat"]), float(cached["lon"]), str(cached.get("source", "cached"))
+        except Exception:
+            pass
+
+    # U.S. Census geocoder first.
+    params = urllib.parse.urlencode(
+        {
+            "address": ADDRESS,
+            "benchmark": "Public_AR_Current",
+            "format": "json",
+        }
+    )
+    census_url = f"https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?{params}"
+    try:
+        data = http_json(census_url)
+        matches = data.get("result", {}).get("addressMatches", [])
+        if matches:
+            coords = matches[0]["coordinates"]
+            lat, lon = float(coords["y"]), float(coords["x"])
+            LOCATION_CACHE.write_text(json.dumps({"address": ADDRESS, "lat": lat, "lon": lon, "source": "U.S. Census Geocoder"}))
+            return lat, lon, "U.S. Census Geocoder"
+    except Exception:
+        pass
+
+    # OpenStreetMap Nominatim fallback.
+    query = urllib.parse.urlencode({"q": ADDRESS, "format": "jsonv2", "limit": 1, "countrycodes": "us"})
+    nominatim_url = f"https://nominatim.openstreetmap.org/search?{query}"
+    data = http_json(nominatim_url)
+    if not data:
+        raise RuntimeError("The target address could not be geocoded.")
+    lat, lon = float(data[0]["lat"]), float(data[0]["lon"])
+    LOCATION_CACHE.write_text(json.dumps({"address": ADDRESS, "lat": lat, "lon": lon, "source": "OpenStreetMap Nominatim"}))
+    return lat, lon, "OpenStreetMap Nominatim"
+
+
+def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    radius = 3958.7613
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp = math.radians(lat2 - lat1)
+    dl = math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * radius * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def bearing_degrees(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dl = math.radians(lon2 - lon1)
+    y = math.sin(dl) * math.cos(p2)
+    x = math.cos(p1) * math.sin(p2) - math.sin(p1) * math.cos(p2) * math.cos(dl)
+    return (math.degrees(math.atan2(y, x)) + 360) % 360
+
+
+def cardinal(deg: float) -> str:
+    names = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    return names[int((deg + 11.25) // 22.5) % 16]
+
+
+def sector8(deg: float) -> str:
+    names = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+    return names[int((deg + 22.5) // 45) % 8]
+
+
+def parse_goes_key_time(key: str) -> datetime | None:
+    match = re.search(r"_s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})(\d)", key)
+    if not match:
+        return None
+    year, day, hour, minute, second, tenth = match.groups()
+    base = datetime.strptime(f"{year}{day}{hour}{minute}{second}", "%Y%j%H%M%S").replace(tzinfo=timezone.utc)
+    return base + timedelta(milliseconds=int(tenth) * 100)
+
+
+def parse_seconds_since(units: str, fallback: datetime) -> datetime:
+    match = re.search(r"seconds\s+since\s+(.+)", units, flags=re.I)
+    if not match:
+        return fallback
+    text = match.group(1).strip().replace("Z", "+00:00")
+    text = text.replace(" UTC", "+00:00")
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        try:
+            dt = datetime.strptime(text.split(".")[0], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return fallback
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+@dataclass(frozen=True)
+class Flash:
+    timestamp: datetime
+    lat: float
+    lon: float
+    distance_mi: float
+    bearing_deg: float
+    energy_j: float | None
+    area_m2: float | None
+    duration_s: float | None
+    group_count: int | None
+    quality_flag: int | None
+
+    @property
+    def age_minutes(self) -> float:
+        return max(0.0, (datetime.now(timezone.utc) - self.timestamp).total_seconds() / 60.0)
+
+    @property
+    def area_km2(self) -> float | None:
+        if self.area_m2 is None:
+            return None
+        return self.area_m2 / 1_000_000.0
+
+
+def s3_hour_keys(satellite: str, hour: datetime) -> list[str]:
+    prefix = f"{GOES_PRODUCT}/{hour.year:04d}/{hour.timetuple().tm_yday:03d}/{hour.hour:02d}/"
+    base = f"https://noaa-goes{satellite}.s3.amazonaws.com/"
+    keys: list[str] = []
+    continuation: str | None = None
+
+    while True:
+        query: dict[str, str] = {"list-type": "2", "prefix": prefix, "max-keys": "1000"}
+        if continuation:
+            query["continuation-token"] = continuation
+        url = base + "?" + urllib.parse.urlencode(query)
+        xml_data = http_bytes(url, accept="application/xml", timeout=35)
+        root = ET.fromstring(xml_data)
+        keys.extend(element.text for element in root.findall(".//{*}Key") if element.text)
+        truncated = (root.findtext(".//{*}IsTruncated") or "false").lower() == "true"
+        continuation = root.findtext(".//{*}NextContinuationToken")
+        if not truncated or not continuation:
+            break
+    return keys
+
+
+def candidate_goes_keys(satellite: str, start: datetime, end: datetime) -> list[str]:
+    first_hour = start.replace(minute=0, second=0, microsecond=0)
+    last_hour = end.replace(minute=0, second=0, microsecond=0)
+    hour = first_hour
+    keys: list[str] = []
+    while hour <= last_hour:
+        keys.extend(s3_hour_keys(satellite, hour))
+        hour += timedelta(hours=1)
+
+    selected: list[tuple[datetime, str]] = []
+    for key in keys:
+        key_time = parse_goes_key_time(key)
+        if key_time is None:
+            continue
+        if start - timedelta(seconds=30) <= key_time <= end + timedelta(minutes=2):
+            selected.append((key_time, key))
+    selected.sort()
+    return [key for _, key in selected]
+
+
+def nc_values(dataset: Dataset, name: str) -> Any:
+    variable = dataset.variables.get(name)
+    if variable is None:
+        return None
+    values = variable[:]
+    if hasattr(values, "filled"):
+        values = values.filled(float("nan"))
+    return values
+
+
+def finite_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def parse_glm_file(payload: bytes, key: str, target_lat: float, target_lon: float,
+                   start: datetime, end: datetime) -> list[Flash]:
+    key_time = parse_goes_key_time(key) or start
+    flashes: list[Flash] = []
+
+    with tempfile.NamedTemporaryFile(suffix=".nc") as temp_file:
+        temp_file.write(payload)
+        temp_file.flush()
+        with Dataset(temp_file.name, mode="r") as dataset:
+            lats = nc_values(dataset, "flash_lat")
+            lons = nc_values(dataset, "flash_lon")
+            first_offsets = nc_values(dataset, "flash_time_offset_of_first_event")
+            if lats is None or lons is None or first_offsets is None:
+                return flashes
+
+            last_offsets = nc_values(dataset, "flash_time_offset_of_last_event")
+            energies = nc_values(dataset, "flash_energy")
+            areas = nc_values(dataset, "flash_area")
+            groups = nc_values(dataset, "flash_child_group_count")
+            quality = nc_values(dataset, "flash_quality_flag")
+            units = getattr(dataset.variables["flash_time_offset_of_first_event"], "units", "")
+            time_base = parse_seconds_since(str(units), key_time)
+
+            for index in range(len(lats)):
+                flash_lat = finite_float(lats[index])
+                flash_lon = finite_float(lons[index])
+                offset = finite_float(first_offsets[index])
+                if flash_lat is None or flash_lon is None or offset is None:
+                    continue
+
+                timestamp = time_base + timedelta(seconds=offset)
+                if timestamp < start or timestamp > end + timedelta(minutes=2):
+                    continue
+
+                distance = haversine_miles(target_lat, target_lon, flash_lat, flash_lon)
+                if distance > RADIUS_MI:
+                    continue
+
+                duration = None
+                if last_offsets is not None:
+                    last_offset = finite_float(last_offsets[index])
+                    if last_offset is not None:
+                        duration = max(0.0, last_offset - offset)
+
+                group_count = None
+                if groups is not None:
+                    group_value = finite_float(groups[index])
+                    if group_value is not None:
+                        group_count = int(group_value)
+
+                quality_flag = None
+                if quality is not None:
+                    quality_value = finite_float(quality[index])
+                    if quality_value is not None:
+                        quality_flag = int(quality_value)
+
+                flashes.append(
+                    Flash(
+                        timestamp=timestamp,
+                        lat=flash_lat,
+                        lon=flash_lon,
+                        distance_mi=distance,
+                        bearing_deg=bearing_degrees(target_lat, target_lon, flash_lat, flash_lon),
+                        energy_j=finite_float(energies[index]) if energies is not None else None,
+                        area_m2=finite_float(areas[index]) if areas is not None else None,
+                        duration_s=duration,
+                        group_count=group_count,
+                        quality_flag=quality_flag,
+                    )
+                )
+    return flashes
+
+
+def get_lightning(lat: float, lon: float) -> tuple[list[Flash], str | None, dict[str, Any]]:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    start = now - timedelta(minutes=LOOKBACK_MIN)
+    metadata: dict[str, Any] = {
+        "satellite": None,
+        "files_listed": 0,
+        "files_downloaded": 0,
+        "files_parsed": 0,
+        "files_failed": 0,
+        "bytes_downloaded": 0,
+        "latest_file_time": None,
+    }
+    listing_errors: list[str] = []
+    keys: list[str] = []
+    satellite = GOES_PRIMARY
+
+    for candidate in (GOES_PRIMARY, GOES_FALLBACK):
+        try:
+            keys = candidate_goes_keys(candidate, start, now)
+        except Exception as exc:
+            listing_errors.append(f"GOES-{candidate}: {exc}")
+            keys = []
+        if keys:
+            satellite = candidate
+            break
+
+    if not keys:
+        detail = "; ".join(listing_errors) if listing_errors else "no recent GLM files were listed"
+        return [], f"NOAA GOES GLM data unavailable: {detail}", metadata
+
+    metadata["satellite"] = satellite
+    metadata["files_listed"] = len(keys)
+    metadata["latest_file_time"] = parse_goes_key_time(keys[-1])
+    base = f"https://noaa-goes{satellite}.s3.amazonaws.com/"
+    flashes: list[Flash] = []
+    seen: set[tuple[Any, ...]] = set()
+
+    def download(key: str) -> tuple[str, bytes]:
+        quoted_key = urllib.parse.quote(key, safe="/")
+        return key, http_bytes(base + quoted_key, accept="application/x-netcdf", timeout=45)
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [executor.submit(download, key) for key in keys]
+        for future in as_completed(futures):
+            try:
+                key, payload = future.result()
+                metadata["files_downloaded"] += 1
+                metadata["bytes_downloaded"] += len(payload)
+                parsed = parse_glm_file(payload, key, lat, lon, start, now)
+                metadata["files_parsed"] += 1
+                for flash in parsed:
+                    dedupe_key = (
+                        round(flash.timestamp.timestamp(), 3),
+                        round(flash.lat, 4),
+                        round(flash.lon, 4),
+                    )
+                    if dedupe_key not in seen:
+                        seen.add(dedupe_key)
+                        flashes.append(flash)
+            except Exception:
+                metadata["files_failed"] += 1
+
+    flashes.sort(key=lambda item: item.timestamp, reverse=True)
+    if metadata["files_downloaded"] == 0:
+        return [], "NOAA GLM files were listed but none could be downloaded.", metadata
+    if metadata["files_parsed"] == 0:
+        return [], "NOAA GLM files downloaded, but none could be decoded as NetCDF4 data.", metadata
+    return flashes, None, metadata
+
+
+def get_open_meteo(lat: float, lon: float) -> tuple[dict[str, Any], str | None]:
+    current_vars = [
+        "temperature_2m", "relative_humidity_2m", "dew_point_2m", "apparent_temperature",
+        "precipitation", "rain", "showers", "weather_code",
+        "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
+        "pressure_msl", "surface_pressure", "wind_speed_10m", "wind_direction_10m",
+        "wind_gusts_10m", "visibility", "cape", "lifted_index", "convective_inhibition",
+        "freezing_level_height", "boundary_layer_height",
+        "temperature_850hPa", "dew_point_850hPa", "wind_speed_850hPa", "wind_direction_850hPa",
+        "geopotential_height_850hPa", "temperature_700hPa", "dew_point_700hPa",
+        "wind_speed_700hPa", "wind_direction_700hPa", "geopotential_height_700hPa",
+        "temperature_500hPa", "dew_point_500hPa", "wind_speed_500hPa", "wind_direction_500hPa",
+        "geopotential_height_500hPa",
+    ]
+    params = urllib.parse.urlencode(
+        {
+            "latitude": f"{lat:.6f}",
+            "longitude": f"{lon:.6f}",
+            "current": ",".join(current_vars),
+            "temperature_unit": "celsius",
+            "wind_speed_unit": "mph",
+            "precipitation_unit": "inch",
+            "timezone": TZ_NAME,
+        }
+    )
+    url = f"https://api.open-meteo.com/v1/gfs?{params}"
+    try:
+        return http_json(url), None
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:500]
+        return {}, f"Open-Meteo HTTP {exc.code}: {body}"
+    except Exception as exc:
+        return {}, f"Open-Meteo request failed: {exc}"
+
+
+def get_nws_alerts(lat: float, lon: float) -> tuple[list[dict[str, Any]], str | None]:
+    url = f"https://api.weather.gov/alerts/active?point={lat:.4f},{lon:.4f}"
+    try:
+        data = http_json(url)
+        return list(data.get("features", [])), None
+    except Exception as exc:
+        return [], f"NWS alert request failed: {exc}"
+
+
+def f_to_str(c: Any) -> str:
+    if c is None:
+        return "n/a"
+    value = float(c)
+    return f"{value * 9 / 5 + 32:.1f} °F / {value:.1f} °C"
+
+
+def num(value: Any, decimals: int = 1, suffix: str = "") -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.{decimals}f}{suffix}"
+    except Exception:
+        return str(value)
+
+
+def meters_to_feet(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 3.28084:,.0f} ft / {float(value):,.0f} m"
+
+
+def hpa_to_inhg(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    v = float(value)
+    return f"{v:.1f} hPa / {v * 0.0295299831:.2f} inHg"
+
+
+def vector_components(speed: float, direction_from_deg: float) -> tuple[float, float]:
+    rad = math.radians(direction_from_deg)
+    return -speed * math.sin(rad), -speed * math.cos(rad)
+
+
+def linear_slope(points: Iterable[tuple[float, float]]) -> float | None:
+    pairs = list(points)
+    if len(pairs) < 3:
+        return None
+    xs = [p[0] for p in pairs]
+    ys = [p[1] for p in pairs]
+    xbar, ybar = statistics.fmean(xs), statistics.fmean(ys)
+    denom = sum((x - xbar) ** 2 for x in xs)
+    if denom == 0:
+        return None
+    return sum((x - xbar) * (y - ybar) for x, y in pairs) / denom
+
+
+def movement_analysis(strikes: list[Flash]) -> tuple[str, dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    recent = [s for s in strikes if (now - s.timestamp).total_seconds() <= 20 * 60]
+    older = [s for s in strikes if 20 * 60 < (now - s.timestamp).total_seconds() <= LOOKBACK_MIN * 60]
+    details: dict[str, Any] = {"recent": recent, "older": older}
+
+    if len(recent) < 2 or len(older) < 2:
+        return "INSUFFICIENT HISTORY", details
+
+    recent_med = statistics.median(s.distance_mi for s in recent)
+    older_med = statistics.median(s.distance_mi for s in older)
+    delta = recent_med - older_med
+    details.update({"recent_median": recent_med, "older_median": older_med, "delta": delta})
+
+    chronological = sorted(strikes, key=lambda s: s.timestamp)
+    t0 = chronological[0].timestamp
+    slope = linear_slope(((s.timestamp - t0).total_seconds() / 60.0, s.distance_mi) for s in chronological)
+    details["slope"] = slope
+
+    if delta <= -5 and (slope is None or slope < -0.05):
+        return "GETTING CLOSER", details
+    if delta >= 5 and (slope is None or slope > 0.05):
+        return "MOVING AWAY", details
+    return "MIXED OR NEARLY STATIONARY", details
+
+
+def storm_risk_label(nearest: float | None) -> tuple[str, str]:
+    if nearest is None:
+        return "NO LIGHTNING FLASHES DETECTED IN THE LOOKBACK WINDOW", GREEN
+    if nearest <= 6:
+        return "EXTREME PROXIMITY", RED
+    if nearest <= 10:
+        return "DANGEROUSLY CLOSE", RED
+    if nearest <= 25:
+        return "HIGH LIGHTNING PROXIMITY", YELLOW
+    if nearest <= 50:
+        return "ELEVATED LIGHTNING PROXIMITY", YELLOW
+    return "LIGHTNING WITHIN THE 100-MILE MONITORING AREA", CYAN
+
+
+def weather_code_text(code: Any) -> str:
+    mapping = {
+        0: "clear", 1: "mainly clear", 2: "partly cloudy", 3: "overcast",
+        45: "fog", 48: "depositing rime fog", 51: "light drizzle", 53: "drizzle",
+        55: "dense drizzle", 61: "light rain", 63: "rain", 65: "heavy rain",
+        80: "light rain showers", 81: "rain showers", 82: "violent rain showers",
+        95: "thunderstorm", 96: "thunderstorm with slight hail", 99: "thunderstorm with heavy hail",
+    }
+    try:
+        return mapping.get(int(code), f"WMO code {int(code)}")
+    except Exception:
+        return "n/a"
+
+
+now_local = datetime.now(LOCAL_TZ)
+now_utc = datetime.now(timezone.utc)
+print(f"{BOLD}SPARROWBUSH LIGHTNING AND CONVECTIVE ATMOSPHERE REPORT{RESET}")
+print(ADDRESS)
+print(f"Local time: {now_local.strftime('%A, %B %d, %Y %I:%M:%S %p %Z')}")
+print(f"24-hour:   {now_local.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+print(f"UTC time:  {now_utc.strftime('%Y-%m-%d %H:%M:%S UTC')}")
+print(f"Monitoring radius: {RADIUS_MI:.0f} miles | Lightning lookback: {LOOKBACK_MIN} minutes")
+
+try:
+    target_lat, target_lon, geocoder = geocode_address()
+except Exception as exc:
+    print(f"\n{RED}Fatal geocoding error: {exc}{RESET}")
+    sys.exit(2)
+
+print(f"Target coordinate: {target_lat:.5f}, {target_lon:.5f} ({geocoder})")
+
+flashes, lightning_error, lightning_meta = get_lightning(target_lat, target_lon)
+weather, weather_error = get_open_meteo(target_lat, target_lon)
+alerts, alerts_error = get_nws_alerts(target_lat, target_lon)
+
+heading("CURRENT LIGHTNING SUMMARY")
+if lightning_error:
+    print(f"{YELLOW}Lightning feed unavailable: {lightning_error}{RESET}")
+    print("Atmospheric and NWS alert sections are still shown below.")
+else:
+    satellite = lightning_meta.get("satellite") or "unknown"
+    latest_file_time = lightning_meta.get("latest_file_time")
+    print(f"Observation source: NOAA GOES-{satellite} GLM Level 2 total-lightning flashes")
+    print(f"Files: {lightning_meta.get('files_downloaded', 0):,} downloaded, "
+          f"{lightning_meta.get('files_parsed', 0):,} decoded of "
+          f"{lightning_meta.get('files_listed', 0):,} listed | failures {lightning_meta.get('files_failed', 0):,}")
+    print(f"Data downloaded: {lightning_meta.get('bytes_downloaded', 0) / 1_048_576:.1f} MiB")
+    if isinstance(latest_file_time, datetime):
+        file_lag = max(0.0, (datetime.now(timezone.utc) - latest_file_time).total_seconds() / 60.0)
+        print(f"Newest GLM product start: {latest_file_time.strftime('%Y-%m-%d %H:%M:%S UTC')} "
+              f"({file_lag:.1f} min old)")
+    if satellite != GOES_PRIMARY:
+        print(f"{YELLOW}GOES-{GOES_PRIMARY} was unavailable; GOES-{satellite} fallback data are being used.{RESET}")
+
+    nearest = min((f.distance_mi for f in flashes), default=None)
+    status, status_color = storm_risk_label(nearest)
+    print(f"Status: {status_color}{BOLD}{status}{RESET}")
+    print(f"Total-lightning flashes within {RADIUS_MI:.0f} miles during last {LOOKBACK_MIN} minutes: {len(flashes):,}")
+
+    if flashes:
+        latest = max(flashes, key=lambda f: f.timestamp)
+        nearest_flash = min(flashes, key=lambda f: f.distance_mi)
+        energies = [f.energy_j for f in flashes if f.energy_j is not None]
+        areas = [f.area_km2 for f in flashes if f.area_km2 is not None]
+        durations = [f.duration_s for f in flashes if f.duration_s is not None]
+        groups = [f.group_count for f in flashes if f.group_count is not None]
+        good_quality = sum(f.quality_flag in (None, 0) for f in flashes)
+
+        print(f"Nearest flash centroid: {nearest_flash.distance_mi:.2f} mi {cardinal(nearest_flash.bearing_deg)} "
+              f"at {nearest_flash.timestamp.astimezone(LOCAL_TZ).strftime('%H:%M:%S %Z')}")
+        print(f"Latest nearby flash:    {latest.age_minutes:.1f} min ago, {latest.distance_mi:.2f} mi "
+              f"{cardinal(latest.bearing_deg)}")
+        print(f"Quality flag 0/unflagged: {good_quality:,} of {len(flashes):,}")
+        if energies:
+            print(f"Radiant energy: median {statistics.median(energies):.3e} J | maximum {max(energies):.3e} J")
+        if areas:
+            print(f"Flash footprint: median {statistics.median(areas):,.1f} km² | maximum {max(areas):,.1f} km²")
+        if durations:
+            print(f"Flash duration: median {statistics.median(durations):.3f} s | maximum {max(durations):.3f} s")
+        if groups:
+            print(f"Constituent groups: median {statistics.median(groups):.1f} | maximum {max(groups):,}")
+
+        subheading("Flash counts and rate by age")
+        time_bins = [(0, 5), (5, 10), (10, 20), (20, 30), (30, 45), (45, 60)]
+        for low, high in time_bins:
+            count = sum(low <= f.age_minutes < high for f in flashes)
+            minutes = max(1, high - low)
+            print(f"{low:>2}-{high:<2} minutes: {count:>6,}  ({count / minutes:>7.2f} flashes/min)")
+
+        last_5 = sum(f.age_minutes < 5 for f in flashes)
+        previous_5 = sum(5 <= f.age_minutes < 10 for f in flashes)
+        if previous_5 == 0:
+            rate_change = "new activity" if last_5 else "no recent activity"
+        else:
+            rate_change = f"{((last_5 - previous_5) / previous_5) * 100:+.1f}% versus prior 5 minutes"
+        print(f"Five-minute flash-rate trend: {rate_change}")
+
+        subheading("Flash counts by distance")
+        distance_bins = [(0, 5), (5, 10), (10, 25), (25, 50), (50, 75), (75, 100)]
+        for low, high in distance_bins:
+            count = sum(low <= f.distance_mi < high for f in flashes)
+            print(f"{low:>3}-{high:<3} miles: {count:>6,}")
+
+        movement, movement_details = movement_analysis(flashes)
+        color = RED if movement == "GETTING CLOSER" else GREEN if movement == "MOVING AWAY" else YELLOW
+        subheading("Distance trend")
+        print(f"Overall result: {color}{BOLD}{movement}{RESET}")
+        if "recent_median" in movement_details:
+            print(f"Recent 0-20 min median distance:      {movement_details['recent_median']:.1f} mi")
+            print(f"Older 20-{LOOKBACK_MIN} min median distance: {movement_details['older_median']:.1f} mi")
+            print(f"Median-distance change:               {movement_details['delta']:+.1f} mi")
+        if movement_details.get("slope") is not None:
+            slope = movement_details["slope"]
+            print(f"Linear distance slope: {slope:+.3f} mi/min ({slope * 10:+.1f} mi per 10 min)")
+        print(f"{DIM}This compares satellite flash-centroid distances over time. It is not radar cell tracking, "
+              f"and multiple storm cells can produce a mixed result.{RESET}")
+
+        subheading("Movement by compass sector")
+        recent = movement_details.get("recent", [])
+        older = movement_details.get("older", [])
+        sector_rows = []
+        for sector in ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]:
+            recent_distances = [f.distance_mi for f in recent if sector8(f.bearing_deg) == sector]
+            older_distances = [f.distance_mi for f in older if sector8(f.bearing_deg) == sector]
+            if len(recent_distances) >= 2 and len(older_distances) >= 2:
+                recent_median = statistics.median(recent_distances)
+                older_median = statistics.median(older_distances)
+                delta = recent_median - older_median
+                trend = "closer" if delta <= -5 else "away" if delta >= 5 else "mixed/stable"
+                sector_rows.append((sector, len(recent_distances), len(older_distances),
+                                    recent_median, older_median, delta, trend))
+        if not sector_rows:
+            print("Insufficient flash history in individual sectors.")
+        else:
+            print("Sector  Recent  Older   Recent median  Older median   Change   Trend")
+            for sector, recent_count, older_count, recent_median, older_median, delta, trend in sector_rows:
+                print(f"{sector:<7} {recent_count:>6} {older_count:>6} {recent_median:>12.1f} mi "
+                      f"{older_median:>11.1f} mi {delta:>+7.1f}  {trend}")
+    else:
+        print("No NOAA GLM total-lightning flashes were detected inside the 100-mile circle during the lookback period.")
+
+heading("TECHNICAL CONVECTIVE ATMOSPHERE")
+if weather_error:
+    print(f"{YELLOW}{weather_error}{RESET}")
+else:
+    current = weather.get("current", {})
+    units = weather.get("current_units", {})
+    valid = current.get("time", "n/a")
+    print(f"Model source: Open-Meteo GFS/HRRR seamless | Valid time: {valid} {TZ_NAME}")
+    print(f"Condition: {weather_code_text(current.get('weather_code'))}")
+
+    subheading("Surface thermodynamics")
+    print(f"Temperature:            {f_to_str(current.get('temperature_2m'))}")
+    print(f"Dew point:              {f_to_str(current.get('dew_point_2m'))}")
+    print(f"Apparent temperature:   {f_to_str(current.get('apparent_temperature'))}")
+    print(f"Relative humidity:      {num(current.get('relative_humidity_2m'), 0, ' %')}")
+    if current.get("temperature_2m") is not None and current.get("dew_point_2m") is not None:
+        temp_c = float(current["temperature_2m"])
+        dew_c = float(current["dew_point_2m"])
+        spread = temp_c - dew_c
+        lcl_m = max(0.0, 125.0 * spread)
+        print(f"Temperature-dewpoint spread: {spread:.1f} °C / {spread*9/5:.1f} °F")
+        print(f"Estimated LCL/cloud base AGL: {lcl_m*3.28084:,.0f} ft / {lcl_m:,.0f} m")
+        rh = current.get("relative_humidity_2m")
+        if rh is not None:
+            rhf = max(1.0, min(100.0, float(rh)))
+            wet_c = (temp_c * math.atan(0.151977 * math.sqrt(rhf + 8.313659))
+                     + math.atan(temp_c + rhf) - math.atan(rhf - 1.676331)
+                     + 0.00391838 * rhf ** 1.5 * math.atan(0.023101 * rhf) - 4.686035)
+            print(f"Estimated wet-bulb temperature: {f_to_str(wet_c)}")
+    print(f"Sea-level pressure:     {hpa_to_inhg(current.get('pressure_msl'))}")
+    print(f"Surface pressure:       {hpa_to_inhg(current.get('surface_pressure'))}")
+    print(f"Precipitation:          {num(current.get('precipitation'), 3, ' in')}")
+    print(f"Rain / showers:         {num(current.get('rain'), 3, ' in')} / {num(current.get('showers'), 3, ' in')}")
+
+    subheading("Instability and inhibition")
+    print(f"CAPE:                   {num(current.get('cape'), 0, ' J/kg')}")
+    print(f"Lifted Index:           {num(current.get('lifted_index'), 1, ' °C')}")
+    print(f"Convective inhibition:  {num(current.get('convective_inhibition'), 0, ' J/kg')}")
+    print(f"Freezing level:         {meters_to_feet(current.get('freezing_level_height'))}")
+    print(f"Boundary-layer height:  {meters_to_feet(current.get('boundary_layer_height'))}")
+
+    subheading("Cloud structure and wind")
+    print(f"Cloud cover total/low/mid/high: "
+          f"{num(current.get('cloud_cover'),0,'%')} / {num(current.get('cloud_cover_low'),0,'%')} / "
+          f"{num(current.get('cloud_cover_mid'),0,'%')} / {num(current.get('cloud_cover_high'),0,'%')}")
+    print(f"Visibility:             {meters_to_feet(current.get('visibility'))}")
+    print(f"Surface wind:           {num(current.get('wind_speed_10m'),1,' mph')} from "
+          f"{num(current.get('wind_direction_10m'),0,'°')} | gusts {num(current.get('wind_gusts_10m'),1,' mph')}")
+
+    t850, td850 = current.get("temperature_850hPa"), current.get("dew_point_850hPa")
+    t700, td700 = current.get("temperature_700hPa"), current.get("dew_point_700hPa")
+    t500, td500 = current.get("temperature_500hPa"), current.get("dew_point_500hPa")
+    z850, z500 = current.get("geopotential_height_850hPa"), current.get("geopotential_height_500hPa")
+
+    subheading("Pressure-level diagnostics")
+    print(f"850 hPa: T {num(t850,1,' °C')} | Td {num(td850,1,' °C')} | wind "
+          f"{num(current.get('wind_speed_850hPa'),1,' mph')} from {num(current.get('wind_direction_850hPa'),0,'°')}")
+    print(f"700 hPa: T {num(t700,1,' °C')} | Td {num(td700,1,' °C')} | wind "
+          f"{num(current.get('wind_speed_700hPa'),1,' mph')} from {num(current.get('wind_direction_700hPa'),0,'°')}")
+    print(f"500 hPa: T {num(t500,1,' °C')} | Td {num(td500,1,' °C')} | wind "
+          f"{num(current.get('wind_speed_500hPa'),1,' mph')} from {num(current.get('wind_direction_500hPa'),0,'°')}")
+
+    if all(v is not None for v in (t850, td850, t700, td700, t500)):
+        k_index = (float(t850) - float(t500)) + float(td850) - (float(t700) - float(td700))
+        total_totals = float(t850) + float(td850) - 2 * float(t500)
+        print(f"K Index:                {k_index:.1f}")
+        print(f"Total Totals Index:     {total_totals:.1f}")
+
+    if all(v is not None for v in (t850, t500, z850, z500)) and float(z500) > float(z850):
+        lapse = (float(t850) - float(t500)) / ((float(z500) - float(z850)) / 1000.0)
+        print(f"850-500 hPa lapse rate: {lapse:.2f} °C/km")
+
+    sfc_speed = current.get("wind_speed_10m")
+    sfc_dir = current.get("wind_direction_10m")
+    mid_speed = current.get("wind_speed_500hPa")
+    mid_dir = current.get("wind_direction_500hPa")
+    if all(v is not None for v in (sfc_speed, sfc_dir, mid_speed, mid_dir)):
+        u1, v1 = vector_components(float(sfc_speed), float(sfc_dir))
+        u2, v2 = vector_components(float(mid_speed), float(mid_dir))
+        shear = math.hypot(u2 - u1, v2 - v1)
+        print(f"Approx. 10 m-500 hPa bulk shear: {shear:.1f} mph")
+
+heading("ACTIVE NWS ALERTS")
+if alerts_error:
+    print(f"{YELLOW}{alerts_error}{RESET}")
+elif not alerts:
+    print("No active NWS alerts were returned for the target point.")
+else:
+    for feature in alerts:
+        p = feature.get("properties", {})
+        event = p.get("event", "Alert")
+        headline = p.get("headline") or p.get("description", "").splitlines()[0]
+        severity = p.get("severity", "Unknown")
+        urgency = p.get("urgency", "Unknown")
+        expires = p.get("expires", "n/a")
+        print(f"{RED}{BOLD}{event}{RESET}")
+        print(f"  Severity/Urgency: {severity} / {urgency}")
+        print(f"  Expires: {expires}")
+        print(f"  {headline}")
+
+if not lightning_error and flashes:
+    heading("ALL NOAA GLM FLASHES WITHIN 100 MILES")
+    print("Local time           UTC time             Age    Dist.  Bearing   Latitude   Longitude    Energy(J)   Area(km²)  Dur(s)  Groups  Q")
+    print("-------------------  -------------------  -----  ------  --------  ---------  ----------  -----------  ---------  ------  ------  -")
+    for flash in flashes:
+        local_text = flash.timestamp.astimezone(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        utc_text = flash.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+        energy_text = "n/a" if flash.energy_j is None else f"{flash.energy_j:.3e}"
+        area_text = "n/a" if flash.area_km2 is None else f"{flash.area_km2:.1f}"
+        duration_text = "n/a" if flash.duration_s is None else f"{flash.duration_s:.3f}"
+        groups_text = "n/a" if flash.group_count is None else str(flash.group_count)
+        quality_text = "n/a" if flash.quality_flag is None else str(flash.quality_flag)
+        print(f"{local_text}  {utc_text}  {flash.age_minutes:5.1f}  {flash.distance_mi:6.2f}  "
+              f"{cardinal(flash.bearing_deg):>3} {flash.bearing_deg:5.1f}°  {flash.lat:9.4f}  {flash.lon:10.4f}  "
+              f"{energy_text:>11}  {area_text:>9}  {duration_text:>6}  {groups_text:>6}  {quality_text:>3}")
+
+heading("DATA NOTES")
+print("Lightning source: NOAA GOES GLM Level 2 LCFA files from NOAA's public AWS Open Data bucket.")
+print("The source is free and anonymous. No subscription, username, password, or API key is used.")
+print("Each listed item is a satellite-detected total-lightning flash centroid, not necessarily a ground strike point.")
+print("GLM combines in-cloud, cloud-to-cloud, and cloud-to-ground activity and does not report polarity or peak current.")
+print("Flash energy is optical radiant energy measured by GLM, not the electrical energy of the discharge.")
+print("Atmospheric fields: Open-Meteo GFS/HRRR seamless model output; these are model-derived, not on-site readings.")
+print("Warnings and watches: National Weather Service active-alert API.")
+print("Movement classification compares flash-centroid distances over time. It does not replace radar storm-cell tracking.")
+print("Surface electric-field strength and cloud charge density are not available from these public terminal feeds.")
+print(f"{YELLOW}Do not use this report as the sole basis for lightning safety decisions. If thunder is heard, move indoors.{RESET}")
+PY
+
+PYTHON_STATUS=$?
+if [[ $PYTHON_STATUS -ne 0 ]]; then
+    printf '\nThe report generator stopped with status %s.\n' "$PYTHON_STATUS" >>"$REPORT_FILE"
+fi
+
+if command -v less >/dev/null 2>&1; then
+    LESS='-R -X -F' less "$REPORT_FILE"
+else
+    cat "$REPORT_FILE"
+fi
+
+close_terminal
