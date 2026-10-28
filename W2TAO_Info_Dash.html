@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>W2TAO Amateur Radio News Dashboard</title>
+<style>
+  :root{
+    --bg:#24282d;
+    --panel:#30363c;
+    --panel2:#292f34;
+    --text:#e8ecef;
+    --muted:#aeb8c2;
+    --border:#46505a;
+    --accent:#64b5f6;
+    --good:#81c784;
+    --warn:#ffcc80;
+    --danger:#ef9a9a;
+    --shadow:0 5px 18px rgba(0,0,0,.28);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:Arial,Helvetica,sans-serif;
+    line-height:1.4;
+  }
+  .wrap{max-width:1280px;margin:0 auto;padding:20px}
+  header{
+    display:flex;align-items:flex-start;justify-content:space-between;
+    gap:18px;margin-bottom:16px
+  }
+  h1{font-size:26px;margin:0 0 4px}
+  .subtitle{color:var(--muted);font-size:14px}
+  .clock{
+    min-width:245px;text-align:right;background:var(--panel);
+    padding:12px 14px;border:1px solid var(--border);border-radius:10px;
+    box-shadow:var(--shadow)
+  }
+  .clock .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+  #utc{font-size:21px;font-weight:700;margin-top:3px}
+  .space-grid{
+    display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:14px;margin-bottom:20px
+  }
+  .card{
+    background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;padding:14px;box-shadow:var(--shadow)
+  }
+  .card-title{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:8px}
+  .card-title h2{font-size:17px;margin:0}
+  .value{font-size:18px;font-weight:700;color:var(--accent)}
+  .small{font-size:12px;color:var(--muted)}
+  #drapImg{
+    width:100%;height:190px;object-fit:contain;background:#111;
+    border-radius:6px;border:1px solid #20262b
+  }
+  canvas{width:100%;height:190px;background:var(--panel2);border-radius:6px}
+  .status{font-size:12px;color:var(--muted);margin-top:7px}
+  .toolbar{
+    display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px
+  }
+  button{
+    background:#3c4852;color:var(--text);border:1px solid #596673;
+    border-radius:7px;padding:9px 13px;cursor:pointer;font-weight:600
+  }
+  button:hover{background:#485661}
+  button.primary{background:#245f8d;border-color:#397cad}
+  button.danger{background:#6a3438;border-color:#8a494e}
+  .section-title{font-size:20px;margin:22px 0 10px}
+  #links, #newsLinks{
+    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px
+  }
+  .link-card{
+    display:flex;align-items:center;gap:12px;background:var(--panel);
+    border:1px solid var(--border);border-radius:9px;padding:12px
+  }
+  .rank{
+    flex:0 0 32px;height:32px;border-radius:50%;background:#3e4851;
+    display:flex;align-items:center;justify-content:center;font-weight:700
+  }
+  .link-body{flex:1;min-width:0}
+  .link-body a{color:#8ecbff;text-decoration:none;font-size:16px;font-weight:700}
+  .link-body a:hover{text-decoration:underline}
+  .link-desc{font-size:12px;color:var(--muted);margin-top:3px}
+  .delete-link{
+    padding:6px 9px;font-size:12px;background:#57363a;border-color:#70464b
+  }
+  .addbox{margin-top:20px}
+  .news-addbox{margin-top:14px}
+  .form-grid{
+    display:grid;grid-template-columns:1fr 1.6fr 2fr auto;gap:9px
+  }
+  input{
+    width:100%;background:#21262b;color:var(--text);
+    border:1px solid var(--border);border-radius:7px;padding:10px
+  }
+  .notice{
+    padding:10px 12px;border-radius:7px;background:#29343b;
+    border:1px solid #3d4d57;color:#cbd6de;font-size:12px;margin-top:10px
+  }
+  footer{color:var(--muted);font-size:12px;margin:22px 0 5px}
+  @media(max-width:900px){
+    .space-grid{grid-template-columns:1fr}
+    #links{grid-template-columns:1fr}
+    .form-grid{grid-template-columns:1fr}
+    header{flex-direction:column}
+    .clock{text-align:left;width:100%}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>W2TAO Amateur Radio News Dashboard</h1>
+      <div class="subtitle">Amateur radio news, DX, regulatory, satellite, and space-weather information</div>
+    </div>
+    <div class="clock">
+      <div class="label">Current UTC time</div>
+      <div id="utc">--:--:-- UTC</div>
+      <div id="utcDate" class="small"></div>
+    </div>
+  </header>
+
+  <section class="space-grid">
+    <div class="card">
+      <div class="card-title">
+        <h2>Solar D-RAP</h2>
+        <span class="value">Live</span>
+      </div>
+      <img id="drapImg" alt="NOAA SWPC D-RAP global absorption map">
+      <div class="status">NOAA SWPC global D-region absorption model. The image refreshes every 5 minutes.</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <h2>Planetary A / Ap</h2>
+        <span class="value" id="aValue">--</span>
+      </div>
+      <canvas id="aChart" width="500" height="190"></canvas>
+      <div class="status" id="aStatus">Loading NOAA forecast...</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">
+        <h2>Planetary Kp</h2>
+        <span class="value" id="kValue">--</span>
+      </div>
+      <canvas id="kChart" width="500" height="190"></canvas>
+      <div class="status" id="kStatus">Loading NOAA Kp data...</div>
+    </div>
+  </section>
+
+  <div class="toolbar">
+    <button class="primary" onclick="refreshSpaceWeather()">Refresh space weather</button>
+    <button onclick="saveUpdatedHTML()">Save updated HTML file</button>
+    <button onclick="resetLinks()">Reset amateur links</button>
+    <button onclick="resetNewsLinks()">Reset headline links</button>
+  </div>
+
+  <h2 class="section-title">Amateur radio news sources</h2>
+  <section id="links"></section>
+
+  <section class="card addbox">
+    <div class="card-title"><h2>Add an amateur-radio link</h2></div>
+    <div class="form-grid">
+      <input id="newName" placeholder="Site name">
+      <input id="newUrl" placeholder="https://example.com">
+      <input id="newDesc" placeholder="Description">
+      <button class="primary" onclick="addLink()">Add link</button>
+    </div>
+  </section>
+
+  <h2 class="section-title">News Headlines</h2>
+  <section id="newsLinks"></section>
+
+  <section class="card addbox news-addbox">
+    <div class="card-title"><h2>Add a news headline link</h2></div>
+    <div class="form-grid">
+      <input id="newsName" placeholder="News source name">
+      <input id="newsUrl" placeholder="https://example.com">
+      <input id="newsDesc" placeholder="Description">
+      <button class="primary" onclick="addNewsLink()">Add link</button>
+    </div>
+    <div class="notice">
+      Amateur-radio links and News Headlines links are stored separately in this browser. Use <b>Save updated HTML file</b> to create a new HTML file containing both current lists.
+    </div>
+  </section>
+
+  <footer>
+    Space-weather data and imagery: NOAA/NWS Space Weather Prediction Center. Internet access is required for live updates.
+  </footer>
+</div>
+
+<script id="embedded-links" type="application/json">
+[
+  {"name":"ARRL News / The ARRL Letter","url":"https://www.arrl.org/news","desc":"U.S. amateur radio news, FCC matters, emergency communications, propagation and operating."},
+  {"name":"Amateur Radio Daily","url":"https://hamradiodaily.com/","desc":"Daily aggregator of amateur-radio headlines from many sources."},
+  {"name":"QRZ / QRZ Now","url":"https://www.qrz.com/","desc":"General ham news, callsign information, equipment and operating discussion."},
+  {"name":"Southgate Amateur Radio News","url":"https://www.southgatearc.org/","desc":"High-volume worldwide amateur-radio news and club information."},
+  {"name":"eHam.net","url":"https://www.eham.net/","desc":"News, technical articles, equipment reviews and operating information."},
+  {"name":"RSGB / GB2RS News","url":"https://rsgb.org/main/news/","desc":"International news, propagation, contests, technical topics and spectrum information."},
+  {"name":"DX-World","url":"https://www.dx-world.net/","desc":"DXpeditions, IOTA, rare entities, schedules and HF operating activity."},
+  {"name":"AMSAT News Service","url":"https://www.amsat.org/","desc":"Amateur satellites, launches, telemetry, ARISS and space communications."},
+  {"name":"IARU","url":"https://www.iaru.org/news-and-events/","desc":"International spectrum, regulatory and amateur-radio policy news."},
+  {"name":"Radio Amateurs of Canada","url":"https://www.rac.ca/","desc":"Canadian and North American regulatory, operating and organizational news."}
+]
+</script>
+
+<script id="embedded-news-links" type="application/json">
+[
+  {
+    "name": "AP News",
+    "url": "https://apnews.com/",
+    "desc": "U.S. and world breaking news, politics, business and major events."
+  },
+  {
+    "name": "Reuters",
+    "url": "https://www.reuters.com/",
+    "desc": "U.S., world, business, markets, technology and breaking news."
+  },
+  {
+    "name": "BBC News",
+    "url": "https://www.bbc.com/news",
+    "desc": "International headlines, U.S. news, science, technology and world coverage."
+  },
+  {
+    "name": "NPR News",
+    "url": "https://www.npr.org/sections/news/",
+    "desc": "U.S. news, politics, business, science and public affairs."
+  },
+  {
+    "name": "CNN",
+    "url": "https://www.cnn.com/",
+    "desc": "Breaking U.S. and world news."
+  },
+  {
+    "name": "Fox News",
+    "url": "https://www.foxnews.com/",
+    "desc": "U.S. and world news, politics and business."
+  },
+  {
+    "name": "ABC News",
+    "url": "https://abcnews.go.com/",
+    "desc": "U.S., world, politics and breaking-news coverage."
+  },
+  {
+    "name": "CBS News",
+    "url": "https://www.cbsnews.com/",
+    "desc": "National, world, politics, business and breaking news."
+  },
+  {
+    "name": "NBC News",
+    "url": "https://www.nbcnews.com/",
+    "desc": "U.S., world, politics, business and current events."
+  },
+  {
+    "name": "USA Today",
+    "url": "https://www.usatoday.com/",
+    "desc": "National headlines, business, weather, travel and general news."
+  }
+]
+</script>
+
+<script>
+const STORAGE_KEY = "w2taoHamNewsLinks_v1";
+const NEWS_STORAGE_KEY = "w2taoHeadlineLinks_v1";
+const DRAP_URL = "https://services.swpc.noaa.gov/images/d-rap/global.png";
+const KP_URL = "https://services.swpc.noaa.gov/products/noaa-planetary-k-index.json";
+const AP_TEXT_URL = "https://services.swpc.noaa.gov/text/45-day-forecast.txt";
+
+let defaultLinks = JSON.parse(document.getElementById("embedded-links").textContent);
+let defaultNewsLinks = JSON.parse(document.getElementById("embedded-news-links").textContent);
+let links = loadLinks();
+let newsLinks = loadNewsLinks();
+
+function loadLinks(){
+  try{
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if(saved) return JSON.parse(saved);
+  }catch(e){}
+  return JSON.parse(JSON.stringify(defaultLinks));
+}
+function storeLinks(){
+  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(links)); }catch(e){}
+}
+function loadNewsLinks(){
+  try{
+    const saved = localStorage.getItem(NEWS_STORAGE_KEY);
+    if(saved) return JSON.parse(saved);
+  }catch(e){}
+  return JSON.parse(JSON.stringify(defaultNewsLinks));
+}
+function storeNewsLinks(){
+  try{ localStorage.setItem(NEWS_STORAGE_KEY, JSON.stringify(newsLinks)); }catch(e){}
+}
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+  })[c]);
+}
+function renderLinks(){
+  const box = document.getElementById("links");
+  box.innerHTML = links.map((x,i)=>`
+    <div class="link-card">
+      <div class="rank">${i+1}</div>
+      <div class="link-body">
+        <a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(x.name)}</a>
+        <div class="link-desc">${escapeHtml(x.desc || "")}</div>
+      </div>
+      <button class="delete-link" onclick="removeLink(${i})">Remove</button>
+    </div>`).join("");
+}
+function addLink(){
+  const name = document.getElementById("newName").value.trim();
+  let url = document.getElementById("newUrl").value.trim();
+  const desc = document.getElementById("newDesc").value.trim();
+  if(!name || !url){ alert("Enter both a site name and URL."); return; }
+  if(!/^https?:\/\//i.test(url)) url = "https://" + url;
+  try{ new URL(url); }catch(e){ alert("Enter a valid web address."); return; }
+  links.push({name,url,desc});
+  storeLinks(); renderLinks();
+  document.getElementById("newName").value="";
+  document.getElementById("newUrl").value="";
+  document.getElementById("newDesc").value="";
+}
+function removeLink(i){
+  links.splice(i,1); storeLinks(); renderLinks();
+}
+function resetLinks(){
+  if(!confirm("Reset the list to the original 10 amateur-radio sites?")) return;
+  links = JSON.parse(JSON.stringify(defaultLinks));
+  storeLinks(); renderLinks();
+}
+function renderNewsLinks(){
+  const box = document.getElementById("newsLinks");
+  box.innerHTML = newsLinks.map((x,i)=>`
+    <div class="link-card">
+      <div class="rank">${i+1}</div>
+      <div class="link-body">
+        <a href="${escapeHtml(x.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(x.name)}</a>
+        <div class="link-desc">${escapeHtml(x.desc || "")}</div>
+      </div>
+      <button class="delete-link" onclick="removeNewsLink(${i})">Remove</button>
+    </div>`).join("");
+}
+function addNewsLink(){
+  const name = document.getElementById("newsName").value.trim();
+  let url = document.getElementById("newsUrl").value.trim();
+  const desc = document.getElementById("newsDesc").value.trim();
+  if(!name || !url){ alert("Enter both a news source name and URL."); return; }
+  if(!/^https?:\/\//i.test(url)) url = "https://" + url;
+  try{ new URL(url); }catch(e){ alert("Enter a valid web address."); return; }
+  newsLinks.push({name,url,desc});
+  storeNewsLinks(); renderNewsLinks();
+  document.getElementById("newsName").value="";
+  document.getElementById("newsUrl").value="";
+  document.getElementById("newsDesc").value="";
+}
+function removeNewsLink(i){
+  newsLinks.splice(i,1); storeNewsLinks(); renderNewsLinks();
+}
+function resetNewsLinks(){
+  if(!confirm("Reset News Headlines to the original list?")) return;
+  newsLinks = JSON.parse(JSON.stringify(defaultNewsLinks));
+  storeNewsLinks(); renderNewsLinks();
+}
+
+function updateClock(){
+  const d = new Date();
+  document.getElementById("utc").textContent =
+    d.toLocaleTimeString("en-GB",{timeZone:"UTC",hour12:false}) + " UTC";
+  document.getElementById("utcDate").textContent =
+    d.toLocaleDateString("en-US",{timeZone:"UTC",weekday:"short",year:"numeric",month:"short",day:"numeric"});
+}
+setInterval(updateClock,1000); updateClock();
+
+function drawLineChart(canvas, values, labels, maxY, suffix=""){
+  const ctx=canvas.getContext("2d");
+  const W=canvas.width,H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle="#292f34";ctx.fillRect(0,0,W,H);
+  const pad={l:38,r:14,t:15,b:28};
+  const w=W-pad.l-pad.r,h=H-pad.t-pad.b;
+  const finite=values.filter(Number.isFinite);
+  if(!finite.length){
+    ctx.fillStyle="#aeb8c2";ctx.font="14px Arial";ctx.fillText("No data",20,35);return;
+  }
+  const ymax=maxY || Math.max(...finite,1)*1.15;
+  ctx.strokeStyle="#48525c";ctx.lineWidth=1;
+  ctx.fillStyle="#aeb8c2";ctx.font="10px Arial";
+  for(let i=0;i<=4;i++){
+    const y=pad.t+h-(h*i/4);
+    ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(W-pad.r,y);ctx.stroke();
+    const val=(ymax*i/4);
+    ctx.fillText((val>=10?Math.round(val):val.toFixed(1))+suffix,3,y+3);
+  }
+  ctx.strokeStyle="#64b5f6";ctx.lineWidth=2;
+  ctx.beginPath();
+  values.forEach((v,i)=>{
+    if(!Number.isFinite(v)) return;
+    const x=pad.l+(values.length===1?0:w*i/(values.length-1));
+    const y=pad.t+h-(Math.min(v,ymax)/ymax*h);
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.fillStyle="#aeb8c2";ctx.font="10px Arial";
+  if(labels.length){
+    ctx.fillText(labels[0],pad.l,H-8);
+    const end=labels[labels.length-1];
+    const tw=ctx.measureText(end).width;
+    ctx.fillText(end,W-pad.r-tw,H-8);
+  }
+}
+
+async function loadKp(){
+  const status=document.getElementById("kStatus");
+  try{
+    const r=await fetch(KP_URL,{cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    const data=await r.json();
+
+    let rows=[];
+    if(Array.isArray(data) && data.length && Array.isArray(data[0])){
+      const headers=data[0].map(x=>String(x).toLowerCase());
+      const ti=headers.findIndex(x=>x.includes("time"));
+      const ki=headers.findIndex(x=>x.includes("kp") || x.includes("k_index"));
+      rows=data.slice(1).map(row=>({time:row[ti],kp:Number(row[ki])}));
+    }else if(Array.isArray(data)){
+      rows=data.map(o=>({
+        time:o.time_tag || o.time || o.timestamp,
+        kp:Number(o.Kp ?? o.kp ?? o.k_index ?? o.estimated_kp)
+      }));
+    }
+    rows=rows.filter(x=>x.time && Number.isFinite(x.kp)).slice(-24);
+    if(!rows.length) throw new Error("No Kp values found");
+    const latest=rows[rows.length-1];
+    document.getElementById("kValue").textContent=latest.kp.toFixed(1);
+    drawLineChart(
+      document.getElementById("kChart"),
+      rows.map(x=>x.kp),
+      rows.map(x=>new Date(x.time).toISOString().slice(11,16)),
+      9
+    );
+    status.textContent="Latest NOAA planetary Kp. Recent observations shown.";
+  }catch(e){
+    status.textContent="Unable to load Kp data: "+e.message;
+    drawLineChart(document.getElementById("kChart"),[],[],9);
+  }
+}
+
+function parseApText(text){
+  const sectionMatch = text.match(/45-DAY AP FORECAST\s*([\s\S]*?)45-DAY F10\.7 CM FLUX FORECAST/i);
+  if(!sectionMatch) return [];
+
+  const section = sectionMatch[1];
+  const matches = [...section.matchAll(/(\d{2}[A-Za-z]{3}\d{2})\s+(\d{3})/g)];
+
+  return matches.map(m => {
+    const rawDate = m[1];
+    const day = rawDate.slice(0,2);
+    const mon = rawDate.slice(2,5);
+    const year = "20" + rawDate.slice(5,7);
+    return {
+      time: `${day} ${mon} ${year}`,
+      label: `${day} ${mon}`,
+      ap: Number(m[2])
+    };
+  }).filter(x => Number.isFinite(x.ap));
+}
+
+async function loadAp(){
+  const status=document.getElementById("aStatus");
+  try{
+    const r=await fetch(AP_TEXT_URL,{cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+
+    const text=await r.text();
+    let rows=parseApText(text);
+
+    if(!rows.length) throw new Error("NOAA plain-text AP forecast could not be parsed");
+
+    rows=rows.slice(0,15);
+
+    document.getElementById("aValue").textContent=rows[0].ap.toFixed(0);
+
+    drawLineChart(
+      document.getElementById("aChart"),
+      rows.map(x=>x.ap),
+      rows.map(x=>x.label),
+      null
+    );
+
+    status.textContent="NOAA SWPC 45-Day AP Forecast, plain-text source. First 15 forecast days shown.";
+  }catch(e){
+    status.textContent="Unable to load AP forecast: "+e.message;
+    drawLineChart(document.getElementById("aChart"),[],[],40);
+  }
+}
+function refreshDrap(){
+  document.getElementById("drapImg").src=DRAP_URL+"?t="+Date.now();
+}
+function refreshSpaceWeather(){
+  refreshDrap();loadKp();loadAp();
+}
+setInterval(refreshDrap,5*60*1000);
+setInterval(loadKp,5*60*1000);
+setInterval(loadAp,30*60*1000);
+
+function buildExportHtml(){
+  const clone=document.documentElement.cloneNode(true);
+  const embedded=clone.querySelector("#embedded-links");
+  embedded.textContent="\n"+JSON.stringify(links,null,2)+"\n";
+  const embeddedNews=clone.querySelector("#embedded-news-links");
+  embeddedNews.textContent="\n"+JSON.stringify(newsLinks,null,2)+"\n";
+
+  return "<!DOCTYPE html>\n"+clone.outerHTML;
+}
+async function saveUpdatedHTML(){
+  const content=buildExportHtml();
+  const filename="W2TAO_Amateur_Radio_News_Dashboard.html";
+  try{
+    if("showSaveFilePicker" in window){
+      const handle=await window.showSaveFilePicker({
+        suggestedName:filename,
+        types:[{description:"HTML file",accept:{"text/html":[".html",".htm"]}}]
+      });
+      const writable=await handle.createWritable();
+      await writable.write(content);
+      await writable.close();
+      alert("Updated HTML file saved.");
+      return;
+    }
+  }catch(e){
+    if(e && e.name==="AbortError") return;
+  }
+  const blob=new Blob([content],{type:"text/html;charset=utf-8"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download=filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000);
+}
+
+renderLinks();
+renderNewsLinks();
+refreshSpaceWeather();
+</script>
+</body>
+</html>

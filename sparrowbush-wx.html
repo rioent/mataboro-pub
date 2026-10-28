@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sparrowbush, NY 12780 Weather</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #eef4f8;
+      margin: 0;
+      padding: 24px;
+      color: #1f2937;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 6px 0;
+      font-size: 30px;
+    }
+
+    h2 {
+      margin-top: 0;
+    }
+
+    .sub {
+      color: #4b5563;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: #ffffff;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.08);
+      margin-bottom: 18px;
+    }
+
+    .status {
+      font-weight: bold;
+      margin-bottom: 12px;
+    }
+
+    .error {
+      color: #b91c1c;
+    }
+
+    button {
+      background: #1d4ed8;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 16px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    button:hover {
+      background: #1e40af;
+    }
+
+    .location,
+    .updated {
+      margin-top: 10px;
+      color: #4b5563;
+      font-size: 14px;
+    }
+
+    .current-grid {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 20px;
+      align-items: center;
+    }
+
+    .current-main {
+      text-align: center;
+    }
+
+    .current-icon {
+      font-size: 72px;
+      line-height: 1;
+    }
+
+    .current-temp {
+      font-size: 36px;
+      font-weight: bold;
+      margin-top: 8px;
+    }
+
+    .current-desc {
+      font-size: 18px;
+      color: #374151;
+      margin-top: 6px;
+    }
+
+    .details-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .detail-box {
+      background: #f8fbfd;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 12px;
+    }
+
+    .detail-label {
+      font-size: 12px;
+      color: #6b7280;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+
+    .detail-value {
+      font-size: 18px;
+      font-weight: bold;
+      color: #111827;
+    }
+
+    .forecast-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+      gap: 14px;
+      margin-top: 8px;
+    }
+
+    .forecast-day {
+      background: #f8fbfd;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 14px;
+      text-align: center;
+    }
+
+    .forecast-date {
+      font-weight: bold;
+      margin-bottom: 6px;
+      font-size: 14px;
+      min-height: 38px;
+    }
+
+    .forecast-icon {
+      font-size: 40px;
+      line-height: 1;
+      margin: 8px 0;
+    }
+
+    .forecast-desc {
+      font-size: 13px;
+      color: #4b5563;
+      min-height: 34px;
+    }
+
+    .forecast-temps {
+      margin-top: 8px;
+      font-size: 15px;
+      font-weight: bold;
+    }
+
+    .forecast-extra {
+      margin-top: 6px;
+      font-size: 12px;
+      color: #6b7280;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #e5e7eb;
+      text-align: left;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    th {
+      background: #eff6ff;
+      position: sticky;
+      top: 0;
+    }
+
+    .hourly-icon {
+      font-size: 20px;
+    }
+
+    @media (max-width: 700px) {
+      .current-grid {
+        grid-template-columns: 1fr;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Sparrowbush, NY 12780 Weather</h1>
+    <div class="sub">Current conditions, hourly details for today, and 7 day outlook</div>
+
+    <div class="card">
+      <div class="status" id="status">Loading weather data...</div>
+      <button onclick="loadWeather()">Refresh Weather</button>
+      <div class="location" id="location"></div>
+      <div class="updated" id="updated"></div>
+    </div>
+
+    <div class="card">
+      <h2>Current Conditions</h2>
+      <div id="currentConditions">Loading current conditions...</div>
+    </div>
+
+    <div class="card">
+      <h2>Today's Hourly Forecast</h2>
+      <div class="table-wrap">
+        <table id="hourlyTable">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Icon</th>
+              <th>Condition</th>
+              <th>Temp</th>
+              <th>Feels Like</th>
+              <th>Humidity</th>
+              <th>Rain Chance</th>
+              <th>Precip</th>
+              <th>Wind</th>
+              <th>Wind Dir</th>
+            </tr>
+          </thead>
+          <tbody id="hourlyBody">
+            <tr><td colspan="10">Loading hourly data...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>7 Day Outlook</h2>
+      <div class="forecast-grid" id="forecastGrid"></div>
+    </div>
+  </div>
+
+  <script>
+    const ZIP_CODE = "12780";
+    const COUNTRY_CODE = "US";
+
+    function weatherCodeToText(code) {
+      const map = {
+        0: "Clear",
+        1: "Mainly Clear",
+        2: "Partly Cloudy",
+        3: "Overcast",
+        45: "Fog",
+        48: "Rime Fog",
+        51: "Light Drizzle",
+        53: "Drizzle",
+        55: "Heavy Drizzle",
+        56: "Freezing Drizzle",
+        57: "Heavy Freezing Drizzle",
+        61: "Light Rain",
+        63: "Rain",
+        65: "Heavy Rain",
+        66: "Freezing Rain",
+        67: "Heavy Freezing Rain",
+        71: "Light Snow",
+        73: "Snow",
+        75: "Heavy Snow",
+        77: "Snow Grains",
+        80: "Rain Showers",
+        81: "Moderate Showers",
+        82: "Heavy Showers",
+        85: "Snow Showers",
+        86: "Heavy Snow Showers",
+        95: "Thunderstorm",
+        96: "Storm with Hail",
+        99: "Severe Storm with Hail"
+      };
+      return map[code] || "Unknown";
+    }
+
+    function weatherCodeToIcon(code, isDay = true) {
+      if (code === 0) return isDay ? "☀️" : "🌙";
+      if (code === 1) return isDay ? "🌤️" : "🌙";
+      if (code === 2) return "⛅";
+      if (code === 3) return "☁️";
+      if (code === 45 || code === 48) return "🌫️";
+      if ([51, 53, 55, 56, 57].includes(code)) return "🌦️";
+      if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "🌧️";
+      if ([71, 73, 75, 77, 85, 86].includes(code)) return "❄️";
+      if ([95, 96, 99].includes(code)) return "⛈️";
+      return "🌤️";
+    }
+
+    function formatForecastDay(dateString) {
+      const d = new Date(dateString + "T12:00:00");
+      return d.toLocaleDateString("en-US", {
+        weekday: "long",
+        month: "short",
+        day: "numeric"
+      });
+    }
+
+    function formatHourLabel(isoString) {
+      const d = new Date(isoString);
+      return d.toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit"
+      });
+    }
+
+    function degToCompass(deg) {
+      const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+      return dirs[Math.round(deg / 22.5) % 16];
+    }
+
+    async function loadWeather() {
+      const status = document.getElementById("status");
+      const updated = document.getElementById("updated");
+      const locationDiv = document.getElementById("location");
+      const currentDiv = document.getElementById("currentConditions");
+      const forecastGrid = document.getElementById("forecastGrid");
+      const hourlyBody = document.getElementById("hourlyBody");
+
+      status.textContent = "Loading weather data...";
+      status.className = "status";
+      updated.textContent = "";
+      locationDiv.textContent = "";
+      currentDiv.innerHTML = "Loading current conditions...";
+      forecastGrid.innerHTML = "";
+      hourlyBody.innerHTML = `<tr><td colspan="10">Loading hourly data...</td></tr>`;
+
+      try {
+        const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(ZIP_CODE)}&count=10&countryCode=${COUNTRY_CODE}&language=en&format=json`;
+        const geoRes = await fetch(geoUrl);
+        if (!geoRes.ok) throw new Error("Failed to retrieve location data.");
+        const geoData = await geoRes.json();
+
+        if (!geoData.results || geoData.results.length === 0) {
+          throw new Error("Could not find location data for ZIP 12780.");
+        }
+
+        let place = geoData.results.find(r =>
+          (r.name && r.name.toLowerCase().includes("sparrowbush")) ||
+          (r.postcodes && r.postcodes.includes("12780"))
+        ) || geoData.results[0];
+
+        const lat = place.latitude;
+        const lon = place.longitude;
+        const placeName = place.name || "Sparrowbush";
+        const admin1 = place.admin1 || "NY";
+
+        const weatherUrl =
+          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}` +
+          `&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m,is_day` +
+          `&hourly=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,wind_direction_10m,is_day` +
+          `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max` +
+          `&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch&timezone=America%2FNew_York&forecast_days=7`;
+
+        const weatherRes = await fetch(weatherUrl);
+        if (!weatherRes.ok) throw new Error("Failed to retrieve weather forecast.");
+        const weatherData = await weatherRes.json();
+
+        locationDiv.innerHTML = `<strong>Location:</strong> ${placeName}, ${admin1} ${ZIP_CODE}`;
+        updated.textContent = `Last updated: ${new Date().toLocaleString()}`;
+
+        const current = weatherData.current;
+        if (!current) {
+          throw new Error("Current conditions data not available.");
+        }
+
+        const currentIcon = weatherCodeToIcon(current.weather_code, current.is_day === 1);
+        const currentText = weatherCodeToText(current.weather_code);
+
+        currentDiv.innerHTML = `
+          <div class="current-grid">
+            <div class="current-main">
+              <div class="current-icon">${currentIcon}</div>
+              <div class="current-temp">${Math.round(current.temperature_2m)}°F</div>
+              <div class="current-desc">${currentText}</div>
+            </div>
+            <div class="details-grid">
+              <div class="detail-box">
+                <div class="detail-label">Feels Like</div>
+                <div class="detail-value">${Math.round(current.apparent_temperature)}°F</div>
+              </div>
+              <div class="detail-box">
+                <div class="detail-label">Humidity</div>
+                <div class="detail-value">${current.relative_humidity_2m}%</div>
+              </div>
+              <div class="detail-box">
+                <div class="detail-label">Wind Speed</div>
+                <div class="detail-value">${Math.round(current.wind_speed_10m)} mph</div>
+              </div>
+              <div class="detail-box">
+                <div class="detail-label">Wind Direction</div>
+                <div class="detail-value">${degToCompass(current.wind_direction_10m)} (${current.wind_direction_10m}°)</div>
+              </div>
+              <div class="detail-box">
+                <div class="detail-label">Precipitation</div>
+                <div class="detail-value">${current.precipitation} in</div>
+              </div>
+              <div class="detail-box">
+                <div class="detail-label">Observation Time</div>
+                <div class="detail-value" style="font-size:15px;">${new Date(current.time).toLocaleString()}</div>
+              </div>
+            </div>
+          </div>
+        `;
+
+        const hourly = weatherData.hourly;
+        if (!hourly || !hourly.time || hourly.time.length === 0) {
+          hourlyBody.innerHTML = `<tr><td colspan="10">Hourly data not available.</td></tr>`;
+        } else {
+          const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+          let rows = "";
+
+          for (let i = 0; i < hourly.time.length; i++) {
+            const timeStr = hourly.time[i];
+            const hourDate = new Date(timeStr);
+            const localDate = hourDate.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+
+            if (localDate !== today) continue;
+
+            const icon = weatherCodeToIcon(hourly.weather_code[i], hourly.is_day[i] === 1);
+            const condition = weatherCodeToText(hourly.weather_code[i]);
+
+            rows += `
+              <tr>
+                <td>${formatHourLabel(timeStr)}</td>
+                <td class="hourly-icon">${icon}</td>
+                <td>${condition}</td>
+                <td>${Math.round(hourly.temperature_2m[i])}°F</td>
+                <td>${Math.round(hourly.apparent_temperature[i])}°F</td>
+                <td>${hourly.relative_humidity_2m[i]}%</td>
+                <td>${hourly.precipitation_probability[i]}%</td>
+                <td>${hourly.precipitation[i]} in</td>
+                <td>${Math.round(hourly.wind_speed_10m[i])} mph</td>
+                <td>${degToCompass(hourly.wind_direction_10m[i])} (${hourly.wind_direction_10m[i]}°)</td>
+              </tr>
+            `;
+          }
+
+          hourlyBody.innerHTML = rows || `<tr><td colspan="10">No hourly data found for today.</td></tr>`;
+        }
+
+        const daily = weatherData.daily;
+        if (!daily || !daily.time || daily.time.length === 0) {
+          throw new Error("7 day forecast data not available.");
+        }
+
+        for (let i = 0; i < daily.time.length; i++) {
+          const icon = weatherCodeToIcon(daily.weather_code[i], true);
+          const desc = weatherCodeToText(daily.weather_code[i]);
+
+          const card = document.createElement("div");
+          card.className = "forecast-day";
+          card.innerHTML = `
+            <div class="forecast-date">${formatForecastDay(daily.time[i])}</div>
+            <div class="forecast-icon">${icon}</div>
+            <div class="forecast-desc">${desc}</div>
+            <div class="forecast-temps">${Math.round(daily.temperature_2m_max[i])}° / ${Math.round(daily.temperature_2m_min[i])}°</div>
+            <div class="forecast-extra">Rain: ${daily.precipitation_probability_max[i]}%</div>
+            <div class="forecast-extra">Wind: ${Math.round(daily.wind_speed_10m_max[i])} mph</div>
+          `;
+          forecastGrid.appendChild(card);
+        }
+
+        status.textContent = "Weather data loaded successfully.";
+      } catch (err) {
+        status.textContent = err.message;
+        status.className = "status error";
+        currentDiv.innerHTML = `<span class="error">${err.message}</span>`;
+        hourlyBody.innerHTML = `<tr><td colspan="10" class="error">${err.message}</td></tr>`;
+      }
+    }
+
+    loadWeather();
+    setInterval(loadWeather, 24 * 60 * 60 * 1000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Weather Report | 12780</title>
+
+  <style>
+    :root {
+      --bg: #05070b;
+      --panel: #0e1724;
+      --panel2: #121f31;
+      --border: #26364f;
+      --text: #eef5ff;
+      --muted: #a8b8cc;
+      --accent: #7cc4ff;
+      --soft: rgba(255, 255, 255, 0.055);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #17263c 0%, #07101d 38%, #020305 100%);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    header {
+      padding: 24px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(5, 7, 11, 0.9);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(10px);
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: clamp(1.8rem, 4vw, 3rem);
+      letter-spacing: -0.045em;
+    }
+
+    .subtitle, .small, .note { color: var(--muted); }
+    .clock { text-align: right; min-width: 260px; }
+
+    main {
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 24px;
+      display: grid;
+      gap: 24px;
+    }
+
+    .grid { display: grid; gap: 18px; }
+    .grid-2 { grid-template-columns: 1.35fr 0.65fr; }
+    .grid-3 { grid-template-columns: repeat(3, 1fr); }
+
+    @media (max-width: 980px) {
+      .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      .clock { text-align: left; }
+    }
+
+    .card {
+      background: linear-gradient(180deg, rgba(18,31,49,0.96), rgba(9,15,24,0.98));
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.35);
+      overflow: hidden;
+    }
+
+    .card h2, .card h3 {
+      margin: 0;
+      padding: 17px 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.98rem;
+      letter-spacing: 0.045em;
+      text-transform: uppercase;
+      color: #d7eaff;
+    }
+
+    .card-body { padding: 20px; }
+
+    iframe {
+      display: block;
+      width: 100%;
+      border: 0;
+      background: #fff;
+    }
+
+    .map-frame { height: 580px; }
+    .forecast-frame { height: 720px; }
+    .compact-frame { height: 520px; }
+
+    .button-row {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 14px;
+    }
+
+    a.button, button {
+      display: inline-block;
+      color: var(--text);
+      background: #122238;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 10px 14px;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    a.button:hover, button:hover { border-color: var(--accent); }
+
+    .quick-box {
+      border: 1px solid var(--border);
+      background: var(--soft);
+      border-radius: 16px;
+      padding: 14px;
+      margin-bottom: 12px;
+    }
+
+    .quick-box strong {
+      display: block;
+      color: #ffffff;
+      margin-bottom: 4px;
+    }
+
+    .source-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .source-list a { color: var(--accent); }
+
+    .image-panel {
+      background: #ffffff;
+      padding: 12px;
+      border-radius: 16px;
+      overflow: auto;
+    }
+
+    .image-panel img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      margin: 0 auto;
+    }
+
+    .forecast-links {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(130px, 1fr));
+      gap: 12px;
+    }
+
+    .forecast-link {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      text-decoration: none;
+      color: var(--text);
+      background: var(--soft);
+    }
+
+    .forecast-link:hover { border-color: var(--accent); }
+    .forecast-link span { display: block; color: var(--muted); font-size: 0.9rem; margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div>
+        <h1>Weather Report</h1>
+        <div class="subtitle">ZIP 12780 • Forestburgh / Sullivan County, New York</div>
+        <div class="small"></div>
+      </div>
+      <div class="clock">
+        <div id="clock">Loading time...</div>
+        <div class="small">Refresh the page for the newest external data.</div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="grid grid-2">
+      <div class="card">
+        <h2>Weather Type / Radar Loop</h2>
+        <iframe class="map-frame" src="https://www.meteo.psu.edu/ewall/WXTYPE/loop25ne.html" title="Penn State Northeast Weather Type Loop"></iframe>
+        <div class="card-body">
+          <div class="note"></div>
+          <div class="button-row">
+            <a class="button" href="https://www.meteo.psu.edu/ewall/WXTYPE/loop25ne.html" target="_blank" rel="noopener">Open full loop</a>
+            <a class="button" href="https://radar.weather.gov/" target="_blank" rel="noopener">Open NOAA radar</a>
+          </div>
+        </div>
+      </div>
+
+      <aside class="card">
+        <h2>Quick Forecast Access</h2>
+        <div class="card-body">
+          <div class="quick-box">
+            <strong>Primary NOAA/NWS forecast</strong>
+            ZIP 12780 forecast page from weather.gov.
+          </div>
+            <div class="button-row">
+            <a class="button" href="https://forecast.weather.gov/zipcity.php?inputstring=12780" target="_blank" rel="noopener">NOAA forecast</a>
+            <a class="button" href="https://forecast.weather.gov/MapClick.php?lat=41.44&lon=-74.72" target="_blank" rel="noopener">Point forecast</a>
+            <a class="button" href="https://www.weather.gov/bgm/" target="_blank" rel="noopener">NWS Binghamton</a>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="card">
+      <h2>NOAA / NWS 5 Day Forecast</h2>
+      <iframe class="forecast-frame" src="https://forecast.weather.gov/zipcity.php?inputstring=12780" title="NOAA Forecast for ZIP 12780"></iframe>
+      <div class="card-body">
+        <div class="note">If your browser blocks the embedded NOAA page, use the buttons below. Some government pages limit iframe display depending on browser settings.</div>
+        <div class="forecast-links">
+          <a class="forecast-link" href="https://forecast.weather.gov/zipcity.php?inputstring=12780" target="_blank" rel="noopener">NOAA 5 Day<span>Forecast page</span></a>
+          <a class="forecast-link" href="https://forecast.weather.gov/MapClick.php?lat=41.44&lon=-74.72" target="_blank" rel="noopener">Point Forecast<span>Lat/Lon 12780</span></a>
+          <a class="forecast-link" href="https://forecast.weather.gov/product.php?site=NWS&issuedby=BGM&product=AFD" target="_blank" rel="noopener">Forecast Discussion<span>NWS Binghamton</span></a>
+          <a class="forecast-link" href="https://www.weather.gov/bgm/briefing" target="_blank" rel="noopener">Weather Briefing<span>NWS BGM</span></a>
+          <a class="forecast-link" href="https://www.weather.gov/bgm/hwo" target="_blank" rel="noopener">Hazard Outlook<span>Regional risks</span></a>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid grid-3">
+      <div class="card">
+        <h2>NOAA Northeast Surface Map</h2>
+        <div class="card-body">
+          <div class="image-panel">
+            <img src="https://www.wpc.ncep.noaa.gov/sfc/90fwbg.gif" alt="NOAA Weather Prediction Center surface forecast map" />
+          </div>
+          <div class="button-row">
+            <a class="button" href="https://www.wpc.ncep.noaa.gov/basicwx/basicwx_ndfd.php" target="_blank" rel="noopener">Open WPC maps</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>NOAA National Radar</h2>
+        <iframe class="compact-frame" src="https://radar.weather.gov/" title="NOAA National Radar"></iframe>
+        <div class="card-body">
+          <div class="note">Direct embedded NOAA radar page. No page script here makes API calls.</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Regional Weather Office</h2>
+        <iframe class="compact-frame" src="https://www.weather.gov/bgm/" title="NWS Binghamton"></iframe>
+        <div class="card-body">
+          <div class="note">NWS Binghamton covers this region and posts local watches, warnings, briefings, and discussion products.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Public Source Links</h2>
+      <div class="card-body source-list">
+        <a href="https://forecast.weather.gov/zipcity.php?inputstring=12780" target="_blank" rel="noopener">NOAA / NWS forecast for ZIP 12780</a>
+        <a href="https://forecast.weather.gov/MapClick.php?lat=41.44&lon=-74.72" target="_blank" rel="noopener">NOAA / NWS point forecast near 12780</a>
+        <a href="https://radar.weather.gov/" target="_blank" rel="noopener">NOAA national radar</a>
+        <a href="https://www.weather.gov/bgm/" target="_blank" rel="noopener">NWS Binghamton local office</a>
+        <a href="https://www.weather.gov/bgm/briefing" target="_blank" rel="noopener">NWS Binghamton briefing page</a>
+        <a href="https://www.weather.gov/bgm/hwo" target="_blank" rel="noopener">Hazardous Weather Outlook</a>
+        <a href="https://www.meteo.psu.edu/ewall/WXTYPE/loop25ne.html" target="_blank" rel="noopener">Penn State E-Wall Northeast weather type loop</a>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function updateClock() {
+      const now = new Date();
+      document.getElementById("clock").textContent = now.toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        weekday: "long",
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+
+    updateClock();
+    setInterval(updateClock, 1000);
+  </script>
+</body>
+</html>
